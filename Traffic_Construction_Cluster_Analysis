@@ -1,0 +1,392 @@
+#Is traffic congestion clustered around constructions sites?
+
+#####   Set-up  ######
+
+
+
+
+#                                              #Libraries
+library(spatstat)
+library(sp)
+library(rgeos)
+library(aspace)
+library(rgdal)
+
+
+
+
+#                                              #Read in Data
+
+            ##Traffic Data
+setwd("/Users/osavir/Documents/Documents/Data Stuff/Traffic")
+traf<-read.csv("311traffic.csv")
+which(is.na(traf[,c(26,27)])=='TRUE')
+traf2<-traf[-c(27,41,271,372,497,554,568,798,899,1024),]
+
+
+            ##Construction Data
+const<-read.csv("construction2.csv")
+
+
+            ##Borough Boundaries
+bb<-readOGR("/Users/osavir/Documents/Documents/Data Stuff/NYC_Boroughs/nybb.shp")
+
+
+
+
+#                                              #spTransform
+
+            ##Traffic Data
+sptraf<-SpatialPointsDataFrame(coords = traf2[,c(26,27)],
+      data = traf2, proj4string = CRS("+init=epsg:2263"))
+sptraf<-sptraf[,c(26,27)]
+names(sptraf)<-c("x","y")
+
+
+            ##Construction Data
+d<-data.frame(x=const[,13],y=const[,12])
+coordinates(d)<-c("x","y")
+proj4string(d) <- CRS("+init=epsg:4326")
+CRS.new <- CRS("+init=epsg:2263")
+spconst <- spTransform(d, CRS.new)
+
+
+#                                              #Initial Plot
+
+plot(bb)
+plot(sptraf,cex=.5,pch=16,col='orange',add=TRUE)
+plot(spconst,cex=.5,pch=16,col='purple',add=TRUE)
+legend("topleft",pch=16,col=c("orange","purple"),legend=c("Traffic","Construction"))
+
+            ##Zoom in on Lower Manhattan
+plot(bb,xlim=c(979715.2,995225.8),ylim=c(193646.3,223632.3))
+plot(sptraf,cex=.5,pch=16,col='orange',add=TRUE)
+plot(spconst,cex=.5,pch=16,col='purple',add=TRUE)
+legend("topleft",pch=16,col=c("orange","purple"),legend=c("Traffic","Construction"))
+
+
+#####   Analysis  ######
+
+
+
+#                                              #G-F-K Tests
+
+
+            ##Create PPP object
+traf.p<-ppp(
+      sptraf$X.Coordinate..State.Plane.,
+      sptraf$Y.Coordinate..State.Plane.,
+      range(sptraf$X.Coordinate..State.Plane.),
+      range(sptraf$Y.Coordinate..State.Plane.))
+
+
+            ##Monte Carlo Envelopes
+G1<-envelope(traf.p,fun=Gest)
+F1<-envelope(traf.p,fun=Fest)
+K1<-envelope(traf.p,fun=Kest)
+
+
+            ##Plot Results
+par(mfrow=c(1,3))
+par(bg="ivory")
+plot(G1,main="sample1=G")
+plot(F1,main="sample1=F")
+plot(K1,main="sample1=K")
+
+
+
+#                                              #SD Ellipses
+
+trafcoords<-as.data.frame(sptraf[,c()])
+names(trafcoords)<-c('x','y')
+constcoords<-as.data.frame(spconst)
+
+
+plot(trafcoords,pch=16,cex=.5,col='orange')
+points(constcoords,pch=16,cex=.5,col='purple')
+
+            ##Zoom in on Lower Manhattan
+plot(bb,xlim=c(978203.6,993600.6),ylim=c(194174.5,220262.6))
+points(trafcoords,pch=16,cex=.5,col='orange',xlim=c(978203.6,993600.6),ylim=c(194174.5,220262.6))
+points(constcoords,pch=16,cex=.5,col='purple')
+legend("topleft",pch=16,col=c("orange","purple"),legend=c("Traffic","Construction"),title='Lower Manhattan')
+
+
+            ##Identify Clusters
+
+
+'%between%'<-function(x,rng) x>rng[1] & x<rng[2]
+lm.traf<-which(trafcoords[,1] %between% c(978203.6,993600.6)&trafcoords[,2] %between% c(194174.5,220262.6))
+lm.traf.coords<-trafcoords[lm.traf,]
+
+lm.const<-which(constcoords[,1] %between% c(978203.6,993600.6)&constcoords[,2] %between% c(194174.5,220262.6))
+lm.const.coords<-constcoords[lm.const,]
+lm.const.coords<-as.data.frame(lm.const.coords)
+
+clust1<-kmeans(lm.traf.coords,4)
+
+w1=lm.traf.coords[which(clust1$cluster==1),]
+w2=lm.traf.coords[which(clust1$cluster==2),]
+w3=lm.traf.coords[which(clust1$cluster==3),]
+w4=lm.traf.coords[which(clust1$cluster==4),]
+
+#                                   #updated sde function (not mine)
+
+calc_sde2<-function (id = 1, filename = "SDE_Output.txt", centre.xy = NULL,
+    calccentre = TRUE, weighted = FALSE, weights = NULL, points = activities,
+    verbose = FALSE)
+{
+    errorcode <- 1000
+    if (length(dim(points)) != 2) {
+        errorcode <- 61
+        cat("\n\nWARNING: Provided points input matrix has fewer than 2 columns.")
+        cat("\nERROR CODE: ", errorcode, "\n\n", sep = "")
+        return("ERROR")
+    }
+    if (dim(points)[2] != 2) {
+        errorcode <- 60
+        cat("\n\nWARNING: Provided points input matrix has too many columns, only 2 are allowed.")
+        cat("\nERROR CODE: ", errorcode, "\n\n", sep = "")
+        return("ERROR")
+    }
+    else {
+        n <- dim(points)[1]
+        if (calccentre) {
+            if (length(centre.xy) == 2) {
+                errorcode <- 21
+                cat("\n\nWARNING: Invalid combination: calccentre=TRUE and centre.xy!=NULL")
+                cat("\nERROR CODE: ", errorcode, "\n\n", sep = "")
+                return("ERROR")
+            }
+            else {
+                if (weighted) {
+                  wt.x <- points[, 1] * weights
+                  wt.y <- points[, 2] * weights
+                  WMC.x <- c(sum(wt.x)/sum(weights))
+                  WMC.y <- c(sum(wt.y)/sum(weights))
+                  centre.xy[1] <- WMC.x
+                  centre.xy[2] <- WMC.y
+                }
+                else {
+                  meanx <- sum(as.numeric(points[, 1]))/n
+                  meany <- sum(as.numeric(points[, 2]))/n
+                  centre.xy[1] <- meanx
+                  centre.xy[2] <- meany
+                }
+            }
+        }
+    }
+    points <- cbind(points, points[, 1]^2, points[, 2]^2)
+    points <- cbind(points, points[, 1] - centre.xy[1], points[,
+        2] - centre.xy[2])
+    points <- cbind(points, points[, 5]^2, points[, 6]^2, points[,
+        5] * points[, 6])
+    names(points) <- c("x", "y", "x2", "y2", "x'", "y'", "x'2",
+        "y'2", "x'y'")
+    if (weighted) {
+        top1 <- sum(weights * points[, 7]) - sum(weights * points[,
+            8])
+        top2 <- sqrt((sum(weights * points[, 7]) - sum(weights *
+            points[, 8]))^2 + 4 * (sum(weights * points[, 9]))^2)
+        bottom <- (2 * sum(weights * points[, 9]))
+        tantheta <- (top1 + top2)/bottom
+    }
+    else {
+        top1 <- sum(points[, 7]) - sum(points[, 8])
+        top2 <- sqrt((sum(points[, 7]) - sum(points[, 8]))^2 +
+            4 * (sum(points[, 9]))^2)
+        bottom <- (2 * sum(points[, 9]))
+        tantheta <- (top1 + top2)/bottom
+    }
+    if (tantheta < 0) {
+        theta <- 180 + (atan_d(tantheta))
+    }
+    else {
+        theta <- atan_d(tantheta)
+    }
+    sintheta <- sin_d(theta)
+    costheta <- cos_d(theta)
+    sin2theta <- sintheta^2
+    cos2theta <- costheta^2
+    sinthetacostheta <- sintheta * costheta
+    if (weighted) {
+        sigmax <- sqrt(2) * sqrt(((sum(weights * points[, 7])) *
+            (cos2theta) - 2 * (sum(weights * points[, 9])) *
+            (sinthetacostheta) + (sum(weights * points[, 8])) *
+            (sin2theta))/((sum(weights)) - 2))
+        sigmay <- sqrt(2) * sqrt(((sum(weights * points[, 7])) *
+            (sin2theta) + 2 * (sum(weights * points[, 9])) *
+            (sinthetacostheta) + (sum(weights * points[, 8])) *
+            (cos2theta))/((sum(weights)) - 2))
+    }
+    else {
+        sigmax <- sqrt(2) * sqrt(((sum(points[, 7])) * (cos2theta) -
+            2 * (sum(points[, 9])) * (sinthetacostheta) + (sum(points[,
+            8])) * (sin2theta))/(n - 2))
+        sigmay <- sqrt(2) * sqrt(((sum(points[, 7])) * (sin2theta) +
+            2 * (sum(points[, 9])) * (sinthetacostheta) + (sum(points[,
+            8])) * (cos2theta))/(n - 2))
+    }
+    if (sigmax > sigmay) {
+        Major <- "SigmaX"
+        Minor <- "SigmaY"
+    }
+    else {
+        Major <- "SigmaY"
+        Minor <- "SigmaX"
+    }
+    lengthsigmax <- 2 * sigmax
+    lengthsigmay <- 2 * sigmay
+    areaSDE <- pi * sigmax * sigmay
+    eccentricity <- sqrt(1 - ((min(sigmax, sigmay)^2)/(max(sigmax,
+        sigmay)^2)))
+    B <- min(sigmax, sigmay)
+    A <- max(sigmax, sigmay)
+    d2 <- (A - B) * (A + B)
+    phi <- 2 * pi * seq(0, 1, len = 360)
+    sp <- sin(phi)
+    cp <- cos(phi)
+    r <- sigmax * sigmay/sqrt(B^2 + d2 * sp^2)
+    xy <- r * cbind(cp, sp)
+    al <- (90 - theta) * pi/180
+    ca <- cos(al)
+    sa <- sin(al)
+    coordsSDE <- xy %*% rbind(c(ca, sa), c(-sa, ca)) + cbind(rep(centre.xy[1],
+        360), rep(centre.xy[2], 360))
+    if (verbose) {
+        cat("\n----------------------------------------------")
+        cat("\nCoordinates of centre (x): ", centre.xy[1], sep = "")
+        cat("\nCoordinates of centre (y): ", centre.xy[2], sep = "")
+        cat("\nAngle of rotation: ", round(theta, 2), " clockwise degrees",
+            sep = "")
+        cat("\nLength of X axis: ", round(lengthsigmax, 2), sep = "")
+        cat("\nLength of Y axis: ", round(lengthsigmay, 2), sep = "")
+        cat("\nArea of SDE ellipse: ", round(areaSDE, 2), sep = "")
+        cat("\ntantheta: ", tantheta, sep = "")
+        cat("\ntheta: ", theta, sep = "")
+        cat("\nsintheta: ", sintheta, sep = "")
+        cat("\ncostheta: ", costheta, sep = "")
+        cat("\nsinthetacostheta: ", sinthetacostheta, sep = "")
+        cat("\nsin2theta: ", sin2theta, sep = "")
+        cat("\ncos2theta: ", cos2theta, sep = "")
+        cat("\nsigmax: ", sigmax, sep = "")
+        cat("\nsigmay: ", sigmay, sep = "")
+        cat("\neccentricity: ", eccentricity, sep = "")
+        cat("\n----------------------------------------------\n\n")
+    }
+    if (sigmax < sigmay) {
+        Theta.Corr <- theta
+    }
+    else {
+        Theta.Corr <- theta + 90
+    }
+    r.SDE <- list(id = id, points = points, coordsSDE = coordsSDE,
+        calccentre = calccentre, CENTRE.x = centre.xy[1], CENTRE.y = centre.xy[2],
+        Major = Major, Minor = Minor, theta = theta, Sigma.x = sigmax,
+        Sigma.y = sigmay, Eccentricity = eccentricity, Area.sde = areaSDE,
+        TanTheta = tantheta, SinTheta = sintheta, CosTheta = costheta,
+        SinThetaCosTheta = sinthetacostheta, Sin2Theta = sin2theta,
+        Cos2Theta = cos2theta, ThetaCorr = Theta.Corr, weighted = weighted,
+        weights = weights)
+    assign("r.SDE", r.SDE, pos = 1)
+    result.sde <- list(id = id, CALCCENTRE = calccentre, weighted = weighted,
+        CENTRE.x = centre.xy[1], CENTRE.y = centre.xy[2], Sigma.x = sigmax,
+        Sigma.y = sigmay, Major = Major, Minor = Minor, Theta = theta,
+        Eccentricity = eccentricity, Area.sde = areaSDE, TanTheta = tantheta,
+        SinTheta = sintheta, CosTheta = costheta, SinThetaCosTheta = sinthetacostheta,
+        Sin2Theta = sin2theta, Cos2Theta = cos2theta, ThetaCorr = Theta.Corr)
+    print(result.sde)
+    result.sde <- as.data.frame(result.sde)
+    assign("sdeatt", result.sde, pos = 1)
+    sdeloc <- as.data.frame(cbind(id, coordsSDE))
+    colnames(sdeloc) = c("id", "x", "y")
+    write.table(sdeloc, sep = ",", file = filename, col.names = FALSE)
+    assign("sdeloc", sdeloc, pos = 1)
+}
+
+E1=calc_sde2(id=1,filename="elipse_temp.txt",centre.xy=NULL,calccentre=TRUE,weighted=FALSE,weights=NULL,points=as.matrix(w1),verbose=FALSE)
+E2=calc_sde2(id=1,filename="elipse_temp.txt",centre.xy=NULL,calccentre=TRUE,weighted=FALSE,weights=NULL,points=as.matrix(w2),verbose=FALSE)
+E3=calc_sde2(id=1,filename="elipse_temp.txt",centre.xy=NULL,calccentre=TRUE,weighted=FALSE,weights=NULL,points=as.matrix(w3),verbose=FALSE)
+E4=calc_sde2(id=1,filename="elipse_temp.txt",centre.xy=NULL,calccentre=TRUE,weighted=FALSE,weights=NULL,points=as.matrix(w4),verbose=FALSE)
+
+plot(bb,xlim=c(979715.2,995225.8),ylim=c(193646.3,223632.3))
+points(lm.traf.coords,pch=16,cex=.5,col='orange',xlim=c(978203.6,993600.6),ylim=c(194174.5,220262.6))
+points(lm.const.coords,pch=16,cex=.5,col='purple')
+legend("topleft",pch=16,col=c("orange","purple"),legend=c("Traffic","Construction"),title='Lower Manhattan')
+polygon(E1[,2],E1[,3],border=1)
+polygon(E2[,2],E2[,3],border=1)
+polygon(E3[,2],E3[,3],border=1)
+polygon(E4[,2],E4[,3],border=1)
+points(clust1$centers[,1],clust1$centers[,2],col=c(1,2,3,4),pch=3,cex=1.5,lwd=2)
+
+
+            ##Traffic Cluster vs. Construction Cluster
+
+clust.traf<-kmeans(lm.traf.coords,1)
+clust.const<-kmeans(lm.const.coords,1)
+
+E.traf<-calc_sde2(id=1,filename="elipse_temp.txt",centre.xy=NULL,calccentre=TRUE,weighted=FALSE,weights=NULL,points=as.matrix(lm.traf.coords[,c(1,2)]),verbose=FALSE)
+E.const<-calc_sde2(id=1,filename="elipse_temp.txt",centre.xy=NULL,calccentre=TRUE,weighted=FALSE,weights=NULL,points=as.matrix(lm.const.coords[,c(1,2)]),verbose=FALSE)
+
+
+plot(bb,xlim=c(979715.2,995225.8),ylim=c(193646.3,223632.3))
+points(lm.traf.coords,pch=16,cex=.5,col='orange')
+points(lm.const.coords,pch=16,cex=.5,col='purple')
+legend("topleft",pch=16,col=c("orange","purple"),legend=c("Traffic","Construction"),title="Lower Manhattan")
+polygon(E.traf[,2],E.traf[,3],border='orange')
+polygon(E.const[,2],E.const[,3],border='purple')
+points(clust.traf$centers[,1],clust.traf$centers[,2],col='orange',pch=3,cex=1.5,lwd=2)
+points(clust.const$centers[,1],clust.const$centers[,2],col='purple',pch=3,cex=1.5,lwd=2)
+
+
+              ##Mean Minimum Distance
+
+tot<-rbind(lm.traf.coords,lm.const.coords)
+names(tot)<-c("x","y")
+coordinates(tot)<- ~x+y
+
+coordinates(lm.traf.coords)<- ~x+y
+coordinates(lm.const.coords)<- ~x+y
+
+##Distance calculation
+d <-gDistance(lm.traf.coords,lm.const.coords,byid=T)
+
+##Calculate mean minimum distance
+minD=c()
+for (i in 1:dim(d)[1]) {
+minD[i]=min(d[i,])
+}
+mean(minD)
+
+##Build random selection system
+minD2=c()
+s2=sample(c("A","B"),length(lm.traf.coords),replace=TRUE)
+
+for (i in 1:100)
+{
+s3=sample(s2)
+d <- gDistance(tot[which(s3=="A"),],tot[which(s3=="B"),],byid=T)
+nn=c()
+for (j in 1:dim(d)[1])
+{
+nn[j]=min(d[j,])
+}
+minD2[i]=mean(nn)
+}
+
+##Plot Results
+par(mfrow=c(1,3))
+par(bg="ivory")
+plot(lm.traf.coords$x, lm.traf.coords$y,pch=16,col='orange',main="Visual Analysis")
+points(lm.const.coords$x, lm.const.coords$y,pch=16,col='purple')
+
+plot(density(minD2),col='navy',main="Mean Distance Analysis")
+abline(v=mean(minD2),col='red',lty=2)
+abline(v=mean(minD),col='pink')
+
+plot(lm.traf.coords$x, lm.traf.coords$y,pch=16,col='orange',main="SD Elipse Analysis")
+points(lm.const.coords$x, lm.const.coords$y,pch=16,col='purple')
+polygon(E.traf[,2],E.traf[,3],border='orange')
+polygon(E.const[,2],E.const[,3],border='purple')
+points(clust.traf$centers[,1],clust.traf$centers[,2],col='orange',pch=3,cex=1.5,lwd=2)
+points(clust.const$centers[,1],clust.const$centers[,2],col='purple',pch=3,cex=1.5,lwd=2)
